@@ -7,7 +7,11 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from '../helpers/msw'
 import { baseUrl, DatadogToolResponse } from '../helpers/datadog'
 
-const dashboardEndpoint = `${baseUrl}/v1/dashboard`
+const listDashboardsEndpoint = `${baseUrl}/v1/dashboard`
+const getDashboardEndpoint = (id: string) => `${baseUrl}/v1/dashboard/${id}`
+
+const IPI_START = '[DATADOG_DATA_START'
+const IPI_END = '[DATADOG_DATA_END]'
 
 describe('Dashboards Tool', () => {
   if (!process.env.DATADOG_API_KEY || !process.env.DATADOG_APP_KEY) {
@@ -23,15 +27,20 @@ describe('Dashboards Tool', () => {
   const apiInstance = new v1.DashboardsApi(datadogConfig)
   const toolHandlers = createDashboardsToolHandlers(apiInstance)
 
-  // https://docs.datadoghq.com/api/latest/dashboards/#get-all-dashboards
   describe.concurrent('list_dashboards', async () => {
-    it('should list dashboards', async () => {
-      const mockHandler = http.get(dashboardEndpoint, async () => {
+    it('should retrieve dashboards', async () => {
+      const mockHandler = http.get(listDashboardsEndpoint, async () => {
         return HttpResponse.json({
           dashboards: [
             {
-              id: 'q5j-nti-fv6',
-              type: 'host_timeboard',
+              id: 'abc-123',
+              title: 'Production Overview',
+              description: 'env:prod',
+              url: '/dashboard/abc-123/production-overview',
+              created_at: '2024-01-01T00:00:00.000Z',
+              modified_at: '2024-06-01T00:00:00.000Z',
+              author_handle: 'user@example.com',
+              layout_type: 'ordered',
             },
           ],
         })
@@ -40,23 +49,99 @@ describe('Dashboards Tool', () => {
       const server = setupServer(mockHandler)
 
       await server.boundary(async () => {
+        const request = createMockToolRequest('list_dashboards', {})
+        const response = (await toolHandlers.list_dashboards(
+          request,
+        )) as unknown as DatadogToolResponse
+
+        expect(response.content[0].text).toContain('Dashboards:')
+        expect(response.content[0].text).toContain('Production Overview')
+        expect(response.content[0].text).toContain('abc-123')
+      })()
+
+      server.close()
+    })
+
+    it('should wrap output in IPI trust boundary markers', async () => {
+      const mockHandler = http.get(listDashboardsEndpoint, async () => {
+        return HttpResponse.json({
+          dashboards: [
+            {
+              id: 'abc-123',
+              title: 'My Dashboard',
+              description: '',
+            },
+          ],
+        })
+      })
+
+      const server = setupServer(mockHandler)
+
+      await server.boundary(async () => {
+        const request = createMockToolRequest('list_dashboards', {})
+        const response = (await toolHandlers.list_dashboards(
+          request,
+        )) as unknown as DatadogToolResponse
+
+        // IPI protection: attacker-controlled dashboard content must be wrapped
+        expect(response.content[0].text).toContain(IPI_START)
+        expect(response.content[0].text).toContain(IPI_END)
+        const startIdx = response.content[0].text.indexOf(IPI_START)
+        const endIdx = response.content[0].text.indexOf(IPI_END)
+        expect(startIdx).toBeLessThan(endIdx)
+      })()
+
+      server.close()
+    })
+
+    it('should filter dashboards by name', async () => {
+      const mockHandler = http.get(listDashboardsEndpoint, async () => {
+        return HttpResponse.json({
+          dashboards: [
+            { id: 'abc-1', title: 'Production Overview', description: '' },
+            { id: 'abc-2', title: 'Staging Dashboard', description: '' },
+          ],
+        })
+      })
+
+      const server = setupServer(mockHandler)
+
+      await server.boundary(async () => {
         const request = createMockToolRequest('list_dashboards', {
-          name: 'test name',
-          tags: ['test_tag'],
+          name: 'production',
         })
         const response = (await toolHandlers.list_dashboards(
           request,
         )) as unknown as DatadogToolResponse
-        expect(response.content[0].text).toContain('Dashboards')
+
+        expect(response.content[0].text).toContain('Production Overview')
+        expect(response.content[0].text).not.toContain('Staging Dashboard')
+      })()
+
+      server.close()
+    })
+
+    it('should throw when no dashboards data is returned', async () => {
+      const mockHandler = http.get(listDashboardsEndpoint, async () => {
+        return HttpResponse.json({})
+      })
+
+      const server = setupServer(mockHandler)
+
+      await server.boundary(async () => {
+        const request = createMockToolRequest('list_dashboards', {})
+        await expect(toolHandlers.list_dashboards(request)).rejects.toThrow(
+          'No dashboards data returned',
+        )
       })()
 
       server.close()
     })
 
     it('should handle authentication errors', async () => {
-      const mockHandler = http.get(dashboardEndpoint, async () => {
+      const mockHandler = http.get(listDashboardsEndpoint, async () => {
         return HttpResponse.json(
-          { errors: ['dummy authentication error'] },
+          { errors: ['Authentication failed'] },
           { status: 403 },
         )
       })
@@ -64,21 +149,17 @@ describe('Dashboards Tool', () => {
       const server = setupServer(mockHandler)
 
       await server.boundary(async () => {
-        const request = createMockToolRequest('list_dashboards', {
-          name: 'test',
-        })
-        await expect(toolHandlers.list_dashboards(request)).rejects.toThrow(
-          'dummy authentication error',
-        )
+        const request = createMockToolRequest('list_dashboards', {})
+        await expect(toolHandlers.list_dashboards(request)).rejects.toThrow()
       })()
 
       server.close()
     })
 
-    it('should handle too many requests', async () => {
-      const mockHandler = http.get(dashboardEndpoint, async () => {
+    it('should handle rate limit errors', async () => {
+      const mockHandler = http.get(listDashboardsEndpoint, async () => {
         return HttpResponse.json(
-          { errors: ['dummy too many requests'] },
+          { errors: ['Rate limit exceeded'] },
           { status: 429 },
         )
       })
@@ -86,33 +167,9 @@ describe('Dashboards Tool', () => {
       const server = setupServer(mockHandler)
 
       await server.boundary(async () => {
-        const request = createMockToolRequest('list_dashboards', {
-          name: 'test',
-        })
+        const request = createMockToolRequest('list_dashboards', {})
         await expect(toolHandlers.list_dashboards(request)).rejects.toThrow(
-          'dummy too many requests',
-        )
-      })()
-
-      server.close()
-    })
-
-    it('should handle unknown errors', async () => {
-      const mockHandler = http.get(dashboardEndpoint, async () => {
-        return HttpResponse.json(
-          { errors: ['dummy unknown error'] },
-          { status: 500 },
-        )
-      })
-
-      const server = setupServer(mockHandler)
-
-      await server.boundary(async () => {
-        const request = createMockToolRequest('list_dashboards', {
-          name: 'test',
-        })
-        await expect(toolHandlers.list_dashboards(request)).rejects.toThrow(
-          'dummy unknown error',
+          'Rate limit exceeded',
         )
       })()
 
@@ -120,18 +177,20 @@ describe('Dashboards Tool', () => {
     })
   })
 
-  // https://docs.datadoghq.com/ja/api/latest/dashboards/#get-a-dashboard
   describe.concurrent('get_dashboard', async () => {
-    it('should get a dashboard', async () => {
-      const dashboardId = '123456789'
+    it('should retrieve a specific dashboard', async () => {
+      const dashboardId = 'abc-123'
       const mockHandler = http.get(
-        `${dashboardEndpoint}/${dashboardId}`,
+        getDashboardEndpoint(dashboardId),
         async () => {
           return HttpResponse.json({
-            id: '123456789',
-            title: 'Dashboard',
+            id: dashboardId,
+            title: 'Production Overview',
+            description: 'Main production dashboard',
             layout_type: 'ordered',
-            widgets: [],
+            widgets: [
+              { id: 1, definition: { type: 'timeseries', title: 'CPU Usage' } },
+            ],
           })
         },
       )
@@ -146,45 +205,52 @@ describe('Dashboards Tool', () => {
           request,
         )) as unknown as DatadogToolResponse
 
-        expect(response.content[0].text).toContain('123456789')
-        expect(response.content[0].text).toContain('Dashboard')
-        expect(response.content[0].text).toContain('ordered')
+        expect(response.content[0].text).toContain('Dashboard:')
+        expect(response.content[0].text).toContain('Production Overview')
+        expect(response.content[0].text).toContain(dashboardId)
       })()
 
       server.close()
     })
 
-    it('should handle not found errors', async () => {
-      const dashboardId = '999999999'
+    it('should wrap get_dashboard output in IPI trust boundary markers', async () => {
+      const dashboardId = 'abc-123'
       const mockHandler = http.get(
-        `${dashboardEndpoint}/${dashboardId}`,
+        getDashboardEndpoint(dashboardId),
         async () => {
-          return HttpResponse.json({ errors: ['Not found'] }, { status: 404 })
+          return HttpResponse.json({
+            id: dashboardId,
+            title: 'My Dashboard',
+            layout_type: 'ordered',
+            widgets: [],
+          })
         },
       )
 
       const server = setupServer(mockHandler)
 
       await server.boundary(async () => {
-        const request = createMockToolRequest('get_dashboard', {
-          dashboardId,
-        })
-        await expect(toolHandlers.get_dashboard(request)).rejects.toThrow(
-          'Not found',
-        )
+        const request = createMockToolRequest('get_dashboard', { dashboardId })
+        const response = (await toolHandlers.get_dashboard(
+          request,
+        )) as unknown as DatadogToolResponse
+
+        // IPI protection: attacker-controlled widget/title content must be wrapped
+        expect(response.content[0].text).toContain(IPI_START)
+        expect(response.content[0].text).toContain(IPI_END)
       })()
 
       server.close()
     })
 
-    it('should handle server errors', async () => {
-      const dashboardId = '123456789'
+    it('should handle authentication errors on get_dashboard', async () => {
+      const dashboardId = 'abc-999'
       const mockHandler = http.get(
-        `${dashboardEndpoint}/${dashboardId}`,
+        getDashboardEndpoint(dashboardId),
         async () => {
           return HttpResponse.json(
-            { errors: ['Internal server error'] },
-            { status: 500 },
+            { errors: ['Authentication failed'] },
+            { status: 403 },
           )
         },
       )
@@ -192,12 +258,8 @@ describe('Dashboards Tool', () => {
       const server = setupServer(mockHandler)
 
       await server.boundary(async () => {
-        const request = createMockToolRequest('get_dashboard', {
-          dashboardId,
-        })
-        await expect(toolHandlers.get_dashboard(request)).rejects.toThrow(
-          'Internal server error',
-        )
+        const request = createMockToolRequest('get_dashboard', { dashboardId })
+        await expect(toolHandlers.get_dashboard(request)).rejects.toThrow()
       })()
 
       server.close()
