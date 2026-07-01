@@ -16,6 +16,9 @@ export const METRICS_TOOLS: MetricsTool[] = [
 
 type MetricsToolHandlers = ToolHandlers<MetricsToolName>
 
+// Maximum allowed time range to prevent OOM / token-bomb (CWE-770)
+const MAX_TIME_RANGE_SECONDS = 86400 // 24 hours
+
 export const createMetricsToolHandlers = (
   apiInstance: v1.MetricsApi,
 ): MetricsToolHandlers => {
@@ -24,6 +27,18 @@ export const createMetricsToolHandlers = (
       const { from, to, query } = QueryMetricsZodSchema.parse(
         request.params.arguments,
       )
+
+      const rangeSeconds = to - from
+      if (rangeSeconds > MAX_TIME_RANGE_SECONDS) {
+        throw new Error(
+          `Time range too large: ${rangeSeconds}s exceeds maximum of ${MAX_TIME_RANGE_SECONDS}s (24 hours). ` +
+            'Use a smaller time window or split into multiple requests.',
+        )
+      }
+
+      if (from >= to) {
+        throw new Error('`from` must be less than `to`')
+      }
 
       const response = await apiInstance.queryMetrics({
         from,

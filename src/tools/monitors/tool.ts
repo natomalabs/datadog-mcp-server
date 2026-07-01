@@ -18,6 +18,9 @@ export const MONITORS_TOOLS: MonitorsTool[] = [
 
 type MonitorsToolHandlers = ToolHandlers<MonitorsToolName>
 
+// Cap response to prevent context-window exhaustion (CWE-770)
+const MAX_MONITORS = 500
+
 export const createMonitorsToolHandlers = (
   apiInstance: v1.MonitorsApi,
 ): MonitorsToolHandlers => {
@@ -31,13 +34,14 @@ export const createMonitorsToolHandlers = (
         groupStates: groupStates?.join(','),
         name,
         tags: tags?.join(','),
+        pageSize: MAX_MONITORS,
       })
 
       if (response == null) {
         throw new Error('No monitors data returned')
       }
 
-      const monitors = response.map((monitor) => ({
+      const allMonitors = response.map((monitor) => ({
         name: monitor.name || '',
         id: monitor.id || 0,
         status: (monitor.overallState as string) || 'unknown',
@@ -48,6 +52,9 @@ export const createMonitorsToolHandlers = (
           ? Math.floor(new Date(monitor.modified).getTime() / 1000)
           : undefined,
       }))
+
+      const monitors = allMonitors.slice(0, MAX_MONITORS)
+      const truncated = allMonitors.length > MAX_MONITORS
 
       // Calculate summary
       const summary = response.reduce(
@@ -95,11 +102,15 @@ export const createMonitorsToolHandlers = (
         },
       )
 
+      const truncationNote = truncated
+        ? `\nNote: Response capped at ${MAX_MONITORS} monitors to prevent context exhaustion. Use name/tags filters to narrow results.`
+        : ''
+
       return {
         content: [
           {
             type: 'text',
-            text: `Monitors: ${JSON.stringify(monitors)}`,
+            text: `Monitors: ${JSON.stringify(monitors)}${truncationNote}`,
           },
           {
             type: 'text',

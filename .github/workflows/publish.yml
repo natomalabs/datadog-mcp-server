@@ -2,6 +2,8 @@
 # One-time setup on npmjs.com: package -> Settings -> Trusted publishing -> GitHub Actions
 #   owner=winor30, repo=mcp-server-datadog, workflow=publish.yml
 # Release by bumping the version and pushing a tag like `v1.8.0`.
+# NOTE: Publishing requires the `npm-publish` GitHub environment to be configured
+# with required reviewers to prevent ungated OIDC token use (CWE-862).
 name: Publish to npm
 
 on:
@@ -13,19 +15,20 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm-publish # Requires manual approval - configure required reviewers in GitHub Settings > Environments
 
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4.1.0
         with:
           run_install: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
