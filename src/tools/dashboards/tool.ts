@@ -28,6 +28,35 @@ const UNTRUSTED_DATA_END = '\n[DATADOG_DATA_END]'
 const wrapUntrusted = (data: string): string =>
   `${UNTRUSTED_DATA_NOTICE}${data}${UNTRUSTED_DATA_END}`
 
+// Strip attacker-authored widget content/URLs and PII before returning to the LLM (SNOW-3716831).
+// - NoteWidget.content / FreeTextWidget.text: free-form user text, can carry injected instructions
+// - IFrameWidget.url / ImageWidget.url / custom_links[].link: attacker-controlled URLs usable as exfil beacons
+// - notifyList / authorHandle / authorName: employee PII not needed for legitimate dashboard queries
+function sanitizeDashboard(
+  dashboard: Record<string, unknown>,
+): Record<string, unknown> {
+  const d = { ...dashboard }
+  delete d.notifyList
+  delete d.authorHandle
+  delete d.authorName
+  delete d.modifiedBy
+  if (Array.isArray(d.widgets)) {
+    d.widgets = (d.widgets as Record<string, unknown>[]).map((widget) => {
+      const w = { ...widget }
+      if (w.definition && typeof w.definition === 'object') {
+        const def = { ...(w.definition as Record<string, unknown>) }
+        delete def.content // NoteWidgetDefinition free-text (injected instructions)
+        delete def.text // FreeTextWidgetDefinition
+        delete def.url // IFrameWidgetDefinition / ImageWidgetDefinition exfil URL
+        delete def.customLinks // WidgetCustomLink[].link exfil URLs
+        w.definition = def
+      }
+      return w
+    })
+  }
+  return d
+}
+
 export const createDashboardsToolHandlers = (
   apiInstance: v1.DashboardsApi,
 ): DashboardsToolHandlers => {
@@ -70,7 +99,6 @@ export const createDashboardsToolHandlers = (
           {
             type: 'text',
             text: wrapUntrusted(`Dashboards: ${JSON.stringify(dashboards)}`),
-
           },
         ],
       }
@@ -84,12 +112,15 @@ export const createDashboardsToolHandlers = (
         dashboardId,
       })
 
+      const sanitized = sanitizeDashboard(
+        response as unknown as Record<string, unknown>,
+      )
+
       return {
         content: [
           {
             type: 'text',
-            text: wrapUntrusted(`Dashboard: ${JSON.stringify(response)}`),
-
+            text: wrapUntrusted(`Dashboard: ${JSON.stringify(sanitized)}`),
           },
         ],
       }
