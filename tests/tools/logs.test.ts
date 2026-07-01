@@ -274,10 +274,11 @@ describe('Logs Tool', () => {
 
         // Check that we've extracted unique services (no duplicates)
         const servicesText = response.content[0].text
+        // Strip trust boundary markers added for IPI protection, then parse the JSON array
         const servicesJson = JSON.parse(
           servicesText.substring(
-            servicesText.indexOf('['),
-            servicesText.lastIndexOf(']') + 1,
+            servicesText.indexOf('["'),
+            servicesText.lastIndexOf('"' + ']') + 2,
           ),
         )
         expect(servicesJson).toHaveLength(3) // Only 3 unique services, not 4
@@ -338,10 +339,11 @@ describe('Logs Tool', () => {
 
         // Ensure we only have one service (the one with a defined service attribute)
         const servicesText = response.content[0].text
+        // Strip trust boundary markers added for IPI protection, then parse the JSON array
         const servicesJson = JSON.parse(
           servicesText.substring(
-            servicesText.indexOf('['),
-            servicesText.lastIndexOf(']') + 1,
+            servicesText.indexOf('["'),
+            servicesText.lastIndexOf('"' + ']') + 2,
           ),
         )
         expect(servicesJson).toHaveLength(1)

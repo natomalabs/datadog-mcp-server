@@ -73,7 +73,7 @@ describe('Metrics Tool', () => {
             },
           ],
           from_date: 1640995000000,
-          to_date: 1641095000000,
+          to_date: 1640998600000,
           group_by: ['host'],
         })
       })
@@ -83,7 +83,7 @@ describe('Metrics Tool', () => {
       await server.boundary(async () => {
         const request = createMockToolRequest('query_metrics', {
           from: 1640995000,
-          to: 1641095000,
+          to: 1640998600, // 1 hour range (within 24h limit)
           query: 'avg:system.cpu.user{*}',
         })
         const response = (await toolHandlers.query_metrics(
@@ -107,7 +107,7 @@ describe('Metrics Tool', () => {
           query: 'avg:non.existent.metric{*}',
           series: [],
           from_date: 1640995000000,
-          to_date: 1641095000000,
+          to_date: 1640998600000,
         })
       })
 
@@ -116,7 +116,7 @@ describe('Metrics Tool', () => {
       await server.boundary(async () => {
         const request = createMockToolRequest('query_metrics', {
           from: 1640995000,
-          to: 1641095000,
+          to: 1640998600, // 1 hour range (within 24h limit)
           query: 'avg:non.existent.metric{*}',
         })
         const response = (await toolHandlers.query_metrics(
@@ -144,7 +144,7 @@ describe('Metrics Tool', () => {
       await server.boundary(async () => {
         const request = createMockToolRequest('query_metrics', {
           from: 1640995000,
-          to: 1641095000,
+          to: 1640998600, // 1 hour range (within 24h limit)
           query: 'invalid:query:format',
         })
         const response = (await toolHandlers.query_metrics(
@@ -171,7 +171,7 @@ describe('Metrics Tool', () => {
       await server.boundary(async () => {
         const request = createMockToolRequest('query_metrics', {
           from: 1640995000,
-          to: 1641095000,
+          to: 1640998600, // 1 hour range (within 24h limit)
           query: 'avg:system.cpu.user{*}',
         })
         await expect(toolHandlers.query_metrics(request)).rejects.toThrow()
@@ -193,7 +193,7 @@ describe('Metrics Tool', () => {
       await server.boundary(async () => {
         const request = createMockToolRequest('query_metrics', {
           from: 1640995000,
-          to: 1641095000,
+          to: 1640998600, // 1 hour range (within 24h limit)
           query: 'avg:system.cpu.user{*}',
         })
         await expect(toolHandlers.query_metrics(request)).rejects.toThrow(
@@ -205,28 +205,15 @@ describe('Metrics Tool', () => {
     })
 
     it('should handle invalid time range errors', async () => {
-      const mockHandler = http.get(metricsEndpoint, async () => {
-        return HttpResponse.json(
-          { errors: ['Time range exceeds allowed limit'] },
-          { status: 400 },
-        )
+      // Our validation now rejects ranges > 24h before hitting the API
+      const request = createMockToolRequest('query_metrics', {
+        from: 1600000000,
+        to: 1700000000, // 100000000s range >> 24h limit
+        query: 'avg:system.cpu.user{*}',
       })
-
-      const server = setupServer(mockHandler)
-
-      await server.boundary(async () => {
-        // Using a very large time range that might exceed limits
-        const request = createMockToolRequest('query_metrics', {
-          from: 1600000000, // Very old date
-          to: 1700000000, // Very recent date
-          query: 'avg:system.cpu.user{*}',
-        })
-        await expect(toolHandlers.query_metrics(request)).rejects.toThrow(
-          'Time range exceeds allowed limit',
-        )
-      })()
-
-      server.close()
+      await expect(toolHandlers.query_metrics(request)).rejects.toThrow(
+        'Time range too large',
+      )
     })
   })
 })
