@@ -29,12 +29,12 @@ startCommand:
     (config) => ({
       command: 'node',
       args: ['build/index.js'],
-      env: Object.assign({}, process.env, {
+      env: {
         DATADOG_API_KEY: config.datadogApiKey,
         DATADOG_APP_KEY: config.datadogAppKey,
         ...(config.datadogSite && { DATADOG_SITE: config.datadogSite }),
         ...(config.datadogSubdomain && { DATADOG_SUBDOMAIN: config.datadogSubdomain })
-      })
+      }
     })
   exampleConfig:
     datadogApiKey: your_datadog_api_key_here
